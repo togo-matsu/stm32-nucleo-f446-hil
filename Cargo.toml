@@ -7,6 +7,7 @@ edition = "2021"
 embassy-executor  = { version = "0.7", features = ["task-arena-size-32768", "arch-cortex-m", "executor-thread", "defmt"] }
 embassy-time      = { version = "0.4", features = ["defmt", "defmt-timestamp-uptime"] }
 embassy-stm32     = { version = "0.2", features = ["defmt", "stm32f446re", "time-driver-any", "exti", "memory-x"] }
+embassy-sync      = { version = "0.6", features = ["defmt"] }
 embedded-io-async = { version = "0.6", default-features = false }
 
 cortex-m          = { version = "0.7", features = ["critical-section-single-core"] }
@@ -18,3 +19,4 @@ panic-probe       = { version = "0.3", features = ["print-defmt"] }
 [profile.release]
 opt-level = "s"
 lto = true
+debug = 2
