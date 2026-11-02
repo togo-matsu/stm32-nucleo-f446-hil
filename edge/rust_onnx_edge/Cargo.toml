@@ -1,0 +1,18 @@
+[package]
+name = "rust_onnx_edge"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ort = { version = "=2.0.0-rc.9", default-features = false, features = ["load-dynamic"] }
+ort-sys = "=2.0.0-rc.9"
+serialport = "4.5"
+tokio = { version = "1.38", features = ["full"] }
+btleplug = "0.11"
+futures = "0.3"
+uuid = "1.8"
+
+# OpenTelemetry & OTLP gRPC
+opentelemetry = { version = "0.27", features = ["trace"] }
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic"] }

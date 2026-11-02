@@ -4,3 +4,18 @@
 __pycache__/
 .pytest_cache/
 *.pyc
+
+# Rust build artifacts
+target/
+**/target/
+
+# Python cache & virtualenv
+__pycache__/
+*.pyc
+venv/
+
+# Machine Learning / ONNX models
+*.onnx
+
+# Temporary logs
+*.log

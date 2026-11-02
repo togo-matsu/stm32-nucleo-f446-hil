@@ -627,6 +627,7 @@ dependencies = [
  "defmt-rtt",
  "embassy-executor",
  "embassy-stm32",
+ "embassy-sync 0.6.2",
  "embassy-time",
  "embedded-io-async",
  "panic-probe",
