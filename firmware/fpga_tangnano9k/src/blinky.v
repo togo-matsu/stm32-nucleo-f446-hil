@@ -4,7 +4,9 @@ module blinky (
     output reg  [5:0] led        // オンボード 6連 LED (負論理: 0で点灯)
 );
 
-    reg [23:0] counter;
+    // 修正: 宣言時に初期値を明示
+    reg [23:0] counter = 24'd0;
+    reg  [5:0] led     = 6'b111110;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
