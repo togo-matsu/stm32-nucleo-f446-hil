@@ -18,6 +18,9 @@ jobs:
         uses: YosysHQ/setup-oss-cad-suite@v3
         with:
           version: '2024-07-01'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Synthesize RTL (Yosys)
         working-directory: firmware/fpga_tangnano9k/src
