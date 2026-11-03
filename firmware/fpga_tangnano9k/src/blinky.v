@@ -1,25 +1,17 @@
 module blinky (
-    input  wire       clk,       // オンボード 27MHz クロック
-    input  wire       rst_n,     // オンボード S1 ボタン (負論理リセット)
-    output reg  [5:0] led        // オンボード 6連 LED (負論理: 0で点灯)
+    input  wire       clk,   // 27MHz クロック (Pin 52)
+    output wire [5:0] led    // 6連 LED (Pin 10,11,13,14,15,16 / 0で点灯)
 );
 
-    // 修正: 宣言時に初期値を明示
-    reg [23:0] counter = 24'd0;
-    reg  [5:0] led     = 6'b111110;
+    // 24ビットカウンタ (約 1350万カウント = 0.5秒)
+    reg [24:0] counter = 25'd0;
 
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            counter <= 24'd0;
-            led     <= 6'b111110; // 初期状態: LED[0] のみ点灯
-        end else begin
-            if (counter >= 24'd13_500_000) begin // 約 0.5 秒周期
-                counter <= 24'd0;
-                led     <= {led[4:0], led[5]};   // 点灯位置をローテーション
-            end else begin
-                counter <= counter + 1'b1;
-            end
-        end
+    always @(posedge clk) begin
+        counter <= counter + 1'b1;
     end
+
+    // カウンタの上位ビットを使って0.5秒周期で全LEDを反転点滅
+    // (負論理のため、反転出力)
+    assign led = {6{counter[23]}};
 
 endmodule
