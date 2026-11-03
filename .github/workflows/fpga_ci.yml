@@ -1,0 +1,49 @@
+name: FPGA Hardware CI/CD (Tang Nano 9K)
+
+on:
+  push:
+    paths:
+      - 'firmware/fpga_tangnano9k/**'
+      - '.github/workflows/fpga_ci.yml'
+  workflow_dispatch:
+
+jobs:
+  build-bitstream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup OSS CAD Suite
+        uses: YosysHQ/setup-oss-cad-suite@v3
+        with:
+          version: '2024-07-01'
+
+      - name: Synthesize RTL (Yosys)
+        working-directory: firmware/fpga_tangnano9k/src
+        run: |
+          yosys -p "read_verilog blinky.v; synth_gowin -top blinky -json blinky.json"
+
+      - name: Place and Route (nextpnr-gowin)
+        working-directory: firmware/fpga_tangnano9k/src
+        run: |
+          nextpnr-gowin \
+            --json blinky.json \
+            --write blinky_pnr.json \
+            --device GW1NR-LV9QN88PC6/I5 \
+            --family GW1N-9C \
+            --cst tangnano9k.cst
+
+      - name: Generate Bitstream (gowin_pack)
+        working-directory: firmware/fpga_tangnano9k/src
+        run: |
+          gowin_pack -d GW1N-9C -o blinky.fs blinky_pnr.json
+          sha256sum blinky.fs > blinky.fs.sha256
+
+      - name: Upload Bitstream Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tangnano9k-bitstream
+          path: |
+            firmware/fpga_tangnano9k/src/blinky.fs
+            firmware/fpga_tangnano9k/src/blinky.fs.sha256
