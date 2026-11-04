@@ -28,15 +28,15 @@ jobs:
         run: |
           yosys -p "read_verilog blinky.v; synth_gowin -top blinky -json blinky.json"
 
-      - name: Place and Route (nextpnr-gowin)
+      - name: Place and Route (nextpnr-himbaechel)
         working-directory: firmware/fpga_tangnano9k/src
         run: |
-          nextpnr-gowin \
+          nextpnr-himbaechel \
             --json blinky.json \
             --write blinky_pnr.json \
             --device GW1NR-LV9QN88PC6/I5 \
-            --family GW1N-9C \
-            --cst tangnano9k.cst
+            --vopt family=GW1N-9C \
+            --vopt cst=tangnano9k.cst
 
       - name: Generate Bitstream (gowin_pack)
         working-directory: firmware/fpga_tangnano9k/src
