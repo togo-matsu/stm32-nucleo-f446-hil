@@ -1,19 +1,23 @@
 module blinky (
-    input  wire       clk,   // 27MHz クロック (Pin 52 / 3.3V Bank)
-    output wire [5:0] led    // 6連 LED (Pin 10,11,13,14,15,16 / 1.8V Bank, 0で点灯)
+    input  wire       clk,       // オンボード 27MHz クロック
+    input  wire       rst_n,     // オンボード S1 ボタン (負論理リセット)
+    output reg  [5:0] led        // オンボード 6連 LED (負論理: 0で点灯)
 );
 
-    reg [24:0] counter = 25'd0;
+    reg [23:0] counter;
 
-    always @(posedge clk) begin
-        counter <= counter + 1'b1;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            counter <= 24'd0;
+            led     <= 6'b111110; // 初期状態: LED[0] のみ点灯
+        end else begin
+            if (counter >= 24'd2_700_000) begin // 約 0.1 秒周期（高速点滅）
+                counter <= 24'd0;
+                led     <= {led[4:0], led[5]};   // 点灯位置をローテーション
+            end else begin
+                counter <= counter + 1'b1;
+            end
+        end
     end
-
-    // led[0], led[1]: クロックに関係なく常時点灯 (0 = ON) -> 回路書き込み成功の証明
-    assign led[0] = 1'b0;
-    assign led[1] = 1'b0;
-
-    // led[5:2]: カウンタの上位4ビットで異なる周期で点滅 -> 27MHzクロック動作の証明
-    assign led[5:2] = ~counter[24:21];
 
 endmodule
