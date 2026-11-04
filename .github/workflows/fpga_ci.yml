@@ -8,6 +8,7 @@ on:
   workflow_dispatch:
 
 jobs:
+  # 1. クラウド側: 高速自動論理合成
   build-bitstream:
     runs-on: ubuntu-latest
     steps:
@@ -27,15 +28,15 @@ jobs:
         run: |
           yosys -p "read_verilog blinky.v; synth_gowin -top blinky -json blinky.json"
 
-      - name: Place and Route (nextpnr-himbaechel)
+      - name: Place and Route (nextpnr-gowin)
         working-directory: firmware/fpga_tangnano9k/src
         run: |
-          nextpnr-himbaechel \
+          nextpnr-gowin \
             --json blinky.json \
             --write blinky_pnr.json \
             --device GW1NR-LV9QN88PC6/I5 \
-            --vopt family=GW1N-9C \
-            --vopt cst=tangnano9k.cst
+            --family GW1N-9C \
+            --cst tangnano9k.cst
 
       - name: Generate Bitstream (gowin_pack)
         working-directory: firmware/fpga_tangnano9k/src
@@ -50,3 +51,25 @@ jobs:
           path: |
             firmware/fpga_tangnano9k/src/blinky.fs
             firmware/fpga_tangnano9k/src/blinky.fs.sha256
+
+  # 2. ローカル K8s 側: エフェメラルランナーによる Storage Gateway への配備
+  deploy-to-storage-gateway:
+    needs: build-bitstream
+    runs-on: [self-hosted, k8s-deployer]
+    steps:
+      - name: Download Bitstream Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tangnano9k-bitstream
+          path: ./artifacts
+
+      - name: Deploy to Storage Gateway (HTTP PUT)
+        run: |
+          cd ./artifacts
+          SHA_VAL=$(sha256sum blinky.fs | awk '{print $1}')
+          echo "${SHA_VAL}  latest.fs" > latest.fs.sha256
+
+          echo "[Deploy] Uploading bitstream to Storage Gateway..."
+          curl -f -X PUT --upload-file blinky.fs http://10.0.0.200/ota/tangnano/latest.fs
+          curl -f -X PUT --upload-file latest.fs.sha256 http://10.0.0.200/ota/tangnano/latest.fs.sha256
+          echo "[Deploy] Successfully uploaded to Storage Gateway!"
