@@ -1,9 +1,9 @@
-// 27MHz クロック (3.3V バンク)
+// 27MHz クロック
 IO_LOC "clk" 52;
 IO_PORT "clk" IO_TYPE=LVCMOS33 PULL_MODE=UP;
 
-// STM32 向け 3.3V トリガー出力 (汎用 GPIO: Pin 38)
-IO_LOC "trigger_out" 38;
+// STM32 EXTI 向け 3.3V トリガー出力 (安全な通常 GPIO: Pin 31)
+IO_LOC "trigger_out" 31;
 IO_PORT "trigger_out" IO_TYPE=LVCMOS33 DRIVE=8;
 
 // オンボード 6連 LED (1.8V バンク)
