@@ -12,7 +12,7 @@ use embassy_stm32::gpio::{Level, Output, Pull, Speed};
 use embassy_stm32::peripherals;
 use embassy_stm32::usart::{self, Config, Uart};
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
-use embassy_sync::signal::Signal;
+use embassy_sync::channel::Channel;
 use embassy_time::Timer;
 use embedded_io_async::Write;
 use {defmt_rtt as _, panic_probe as _};
@@ -25,9 +25,18 @@ bind_interrupts!(struct Irqs {
 static IS_EMERGENCY: AtomicBool = AtomicBool::new(false);
 static LED_STATE: AtomicBool = AtomicBool::new(false);
 static ESTOP_COUNT: AtomicU32 = AtomicU32::new(0);
+static FPGA_PULSE_COUNT: AtomicU32 = AtomicU32::new(0);
 
-// 緊急停止発生時に出力ピンを即時遮断するためのシグナル
-static ESTOP_SIGNAL: Signal<ThreadModeRawMutex, ()> = Signal::new();
+// LED 制御コマンドの定義
+#[derive(Clone, Copy)]
+enum LedMsg {
+    Set(bool),
+    Pulse,
+    EmergencyOff,
+}
+
+// タスク間で安全に LED 動作を要求するための非同期チャンネル
+static LED_CHANNEL: Channel<ThreadModeRawMutex, LedMsg, 8> = Channel::new();
 
 struct BufferWriter<'a> {
     buf: &'a mut [u8],
@@ -60,18 +69,59 @@ impl<'a> FmtWrite for BufferWriter<'a> {
 async fn button_estop_task(mut button: ExtiInput<'static>) {
     info!("[EXTI] User Button (PC13) E-Stop monitor active");
     loop {
-        // Nucleo-F446RE の青ボタンは押下時に Low (Falling Edge)
         button.wait_for_falling_edge().await;
         IS_EMERGENCY.store(true, Ordering::SeqCst);
         let cnt = ESTOP_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-        ESTOP_SIGNAL.signal(());
+        let _ = LED_CHANNEL.try_send(LedMsg::EmergencyOff);
         warn!("[EXTI] Hardware E-STOP triggered via PC13! (Count: {})", cnt);
-        // チャタリング防止待機
         Timer::after_millis(50).await;
     }
 }
 
-// タスク2: 定期システム監視
+// タスク2: FPGA (Tang Nano 9K Pin 31) からの外部割り込み検知 (D2 / PA10)
+#[embassy_executor::task]
+async fn fpga_trigger_task(mut trigger: ExtiInput<'static>) {
+    info!("[EXTI] FPGA Trigger (PA10 / D2) monitor active");
+    loop {
+        trigger.wait_for_rising_edge().await;
+        let cnt = FPGA_PULSE_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        // LED 点滅タスクへパルス通知 (ノンブロッキング)
+        let _ = LED_CHANNEL.try_send(LedMsg::Pulse);
+        info!("[FPGA-EXTI] Hardware pulse detected on Pin D2 (PA10)! (Count: {})", cnt);
+    }
+}
+
+// タスク3: 独立した LED (PA5 / LD2) 駆動タスク
+#[embassy_executor::task]
+async fn led_task(mut led: Output<'static>) {
+    let mut manual_on = false;
+    loop {
+        match LED_CHANNEL.receive().await {
+            LedMsg::Set(on) => {
+                manual_on = on;
+                if manual_on {
+                    led.set_high();
+                } else {
+                    led.set_low();
+                }
+            }
+            LedMsg::Pulse => {
+                // 手動点灯中でなく、かつ緊急停止中でない場合のみパルス点滅
+                if !manual_on && !IS_EMERGENCY.load(Ordering::Relaxed) {
+                    led.set_high();
+                    Timer::after_millis(60).await;
+                    led.set_low();
+                }
+            }
+            LedMsg::EmergencyOff => {
+                manual_on = false;
+                led.set_low();
+            }
+        }
+    }
+}
+
+// タスク4: 定期システム監視
 #[embassy_executor::task]
 async fn monitor_task() {
     let mut seconds: u32 = 0;
@@ -79,7 +129,8 @@ async fn monitor_task() {
         Timer::after_secs(5).await;
         seconds += 5;
         let mode = if IS_EMERGENCY.load(Ordering::Relaxed) { "EMERGENCY" } else { "NORMAL" };
-        info!("[SYS-MONITOR] Uptime: {}s | Mode: {}", seconds, mode);
+        let fpga_cnt = FPGA_PULSE_COUNT.load(Ordering::Relaxed);
+        info!("[SYS-MONITOR] Uptime: {}s | Mode: {} | FPGA Pulses: {}", seconds, mode, fpga_cnt);
     }
 }
 
@@ -88,20 +139,24 @@ async fn main(spawner: Spawner) {
     let p = embassy_stm32::init(Default::default());
     info!("=== [BOOT] STM32F446RE Functional HIL Controller ===");
 
-    // オンボード青ボタン (PC13 + EXTI13) の初期化とタスク起動
+    // オンボード緑色 LED (PA5) の初期化と専用タスク起動
+    let led = Output::new(p.PA5, Level::Low, Speed::Low);
+    spawner.spawn(led_task(led)).unwrap();
+
+    // EXTI タスク・監視タスク起動
     let button = ExtiInput::new(p.PC13, p.EXTI13, Pull::Up);
     spawner.spawn(button_estop_task(button)).unwrap();
+
+    let fpga_trigger = ExtiInput::new(p.PA10, p.EXTI10, Pull::Down);
+    spawner.spawn(fpga_trigger_task(fpga_trigger)).unwrap();
+
     spawner.spawn(monitor_task()).unwrap();
 
-    // オンボード緑色 LED (PA5: アクチュエータ模擬)
-    let mut led = Output::new(p.PA5, Level::Low, Speed::Low);
-
-    // 内蔵 ADC1 の初期化 (基準電圧 VREFINT & 内蔵温度センサー読み取り用)
+    // 内蔵 ADC1 の初期化
     let mut adc = Adc::new(p.ADC1);
     adc.set_sample_time(SampleTime::CYCLES480);
     let mut vrefint_channel = adc.enable_vrefint();
     let mut temp_channel = adc.enable_temperature();
-    // 内部チャネル安定化待ち
     Timer::after_millis(10).await;
 
     // USART2 DMA 初期化
@@ -121,21 +176,8 @@ async fn main(spawner: Spawner) {
 
     let mut rx_buf = [0u8; 128];
     loop {
-        // ハードウェア割り込み等で E-STOP シグナルが来ていたら即座に LED を強制 OFF
-        if ESTOP_SIGNAL.signaled() {
-            ESTOP_SIGNAL.reset();
-            led.set_low();
-            LED_STATE.store(false, Ordering::SeqCst);
-        }
-
         match usart.read_until_idle(&mut rx_buf).await {
             Ok(n) if n > 0 => {
-                // 受信中にも E-STOP が入っていないか再確認
-                if IS_EMERGENCY.load(Ordering::SeqCst) {
-                    led.set_low();
-                    LED_STATE.store(false, Ordering::SeqCst);
-                }
-
                 let raw_str = match core::str::from_utf8(&rx_buf[..n]) {
                     Ok(s) => s.trim(),
                     Err(_) => {
@@ -154,45 +196,38 @@ async fn main(spawner: Spawner) {
                     let _ = usart.write_all(b"PONG\r\n").await;
 
                 } else if raw_str == "ESTOP" {
-                    // 緊急停止の発動：アクチュエータ(LED)を即時遮断しインターロックをかける
                     IS_EMERGENCY.store(true, Ordering::SeqCst);
                     ESTOP_COUNT.fetch_add(1, Ordering::SeqCst);
-                    led.set_low();
                     LED_STATE.store(false, Ordering::SeqCst);
+                    let _ = LED_CHANNEL.send(LedMsg::EmergencyOff).await;
                     warn!("[SAFETY] E-STOP activated! Actuator locked.");
                     let _ = usart.write_all(b"OK MODE=EMERGENCY LED=0\r\n").await;
 
                 } else if raw_str == "RESET_FAULT" {
-                    // 安全確認後のインターロック解除
                     IS_EMERGENCY.store(false, Ordering::SeqCst);
                     info!("[SAFETY] Fault cleared. System back to NORMAL.");
                     let _ = usart.write_all(b"OK MODE=NORMAL\r\n").await;
 
                 } else if raw_str == "LED 1" || raw_str == "LED ON" {
-                    // インターロック判定：EMERGENCY 状態なら稼働要求を拒否
                     if IS_EMERGENCY.load(Ordering::SeqCst) {
                         warn!("[SAFETY] Rejected LED ON due to active E-STOP interlock!");
                         let _ = usart.write_all(b"ERR INTERLOCK_ACTIVE\r\n").await;
                     } else {
-                        led.set_high();
                         LED_STATE.store(true, Ordering::SeqCst);
+                        let _ = LED_CHANNEL.send(LedMsg::Set(true)).await;
                         let _ = usart.write_all(b"OK LED=1\r\n").await;
                     }
 
                 } else if raw_str == "LED 0" || raw_str == "LED OFF" {
-                    led.set_low();
                     LED_STATE.store(false, Ordering::SeqCst);
+                    let _ = LED_CHANNEL.send(LedMsg::Set(false)).await;
                     let _ = usart.write_all(b"OK LED=0\r\n").await;
 
                 } else if raw_str == "READ_ADC" {
-                    // 内蔵基準電圧 (VREFINT) と温度センサーの 12bit ADC 計測
                     let vref_raw = adc.blocking_read(&mut vrefint_channel);
                     let temp_raw = adc.blocking_read(&mut temp_channel);
 
-                    // VDDA=3300mV 基準での VREFINT 換算 (mV)
                     let vref_mv = (vref_raw as u32 * 3300) / 4095;
-                    // STM32F4 内蔵温度センサー換算式: Temp = ((Vsense - V25) / Avg_Slope) + 25
-                    // V25 = 760mV, Avg_Slope = 2.5mV/C
                     let vsense_mv = (temp_raw as i32 * 3300) / 4095;
                     let temp_c_x10 = ((vsense_mv - 760) * 100) / 25 + 250;
 
@@ -209,20 +244,22 @@ async fn main(spawner: Spawner) {
                     let _ = usart.write_all(writer.as_bytes()).await;
 
                 } else if raw_str == "STATUS" {
-                    let mut out_buf = [0u8; 96];
+                    let mut out_buf = [128u8; 128];
                     let mut writer = BufferWriter::new(&mut out_buf);
                     let uptime_ms = embassy_time::Instant::now().as_millis();
                     let mode_str = if IS_EMERGENCY.load(Ordering::SeqCst) { "EMERGENCY" } else { "NORMAL" };
                     let led_val = if LED_STATE.load(Ordering::SeqCst) { 1 } else { 0 };
                     let estop_cnt = ESTOP_COUNT.load(Ordering::SeqCst);
+                    let fpga_cnt = FPGA_PULSE_COUNT.load(Ordering::SeqCst);
 
                     let _ = core::write!(
                         writer,
-                        "OK MODE={} UPTIME={}ms LED={} ESTOP_CNT={}\r\n",
+                        "OK MODE={} UPTIME={}ms LED={} ESTOP_CNT={} FPGA_CNT={}\r\n",
                         mode_str,
                         uptime_ms,
                         led_val,
-                        estop_cnt
+                        estop_cnt,
+                        fpga_cnt
                     );
                     let _ = usart.write_all(writer.as_bytes()).await;
 
