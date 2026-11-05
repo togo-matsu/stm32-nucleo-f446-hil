@@ -73,3 +73,8 @@ jobs:
           curl -f -X PUT --upload-file blinky.fs http://10.0.0.200/ota/tangnano/latest.fs
           curl -f -X PUT --upload-file latest.fs.sha256 http://10.0.0.200/ota/tangnano/latest.fs.sha256
           echo "[Deploy] Successfully uploaded to Storage Gateway!"
+
+	- name: Trigger FPGA Flash Update on Target
+		run: |
+		  echo "[Deploy] Triggering FPGA OTA write to Tang Nano 9K..."
+		  /home/you/stm32-workspace/nucleo_f446_app/edge/scripts/fpga_ota_agent.sh
