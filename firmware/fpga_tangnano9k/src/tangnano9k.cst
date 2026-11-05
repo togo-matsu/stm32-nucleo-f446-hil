@@ -1,12 +1,6 @@
-// 27MHz クロック入力 (Pin 52)
 IO_LOC "clk" 52;
 IO_PORT "clk" PULL_MODE=UP;
 
-// リセットボタン (Pin 3: S1)
-IO_LOC "rst_n" 3;
-IO_PORT "rst_n" PULL_MODE=UP;
-
-// オンボード 6連 LED (Pin 10, 11, 13, 14, 15, 16)
 IO_LOC "led[0]" 10;
 IO_PORT "led[0]" PULL_MODE=UP DRIVE=8;
 
